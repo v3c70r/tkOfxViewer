@@ -8,7 +8,7 @@ class Parser:
         ofx = OfxParser.parse(self.fileObj)
         records = [];
         for transaction in ofx.account.statement.transactions:
-            records.append((transaction.date.date(), transaction.amount, transaction.payee))
+            records.append((transaction.date.date(), transaction.payee, transaction.amount, ofx.account.statement.currency.upper()))
         return records
 
 

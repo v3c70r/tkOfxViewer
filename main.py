@@ -10,10 +10,11 @@ args = parser.parse_args()
 file_path = args.file_path
 root = tk.Tk()
 root.title(file_path)
-tree = ttk.Treeview(root, columns=("Date", "Amount", "Payee"), show="headings")
+tree = ttk.Treeview(root, columns=("Date", "Payee", "Amount", "Currency"), show="headings")
 tree.heading("Date", text="Date")
 tree.heading("Amount", text="Amount")
 tree.heading("Payee", text="Payee")
+tree.heading("Currency", text="Currency")
 
 parser = Parser(file_path)
 records = parser.parse()
