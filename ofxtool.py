@@ -13,9 +13,12 @@ import csv
 import json
 import os
 import sys
+import warnings
 from datetime import date
 from decimal import Decimal
 from parser import AccountInfo, OfxParserWrapper, OfxResult
+
+warnings.filterwarnings("ignore", category=Warning)
 
 
 class DecimalEncoder(json.JSONEncoder):
