@@ -15,7 +15,7 @@ import os
 import sys
 from datetime import date
 from decimal import Decimal
-from parser import OfxParserWrapper
+from parser import AccountInfo, OfxParserWrapper, OfxResult
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -75,17 +75,93 @@ def err(msg):
     sys.exit(1)
 
 
+def merge_accounts(datasets):
+    """Group datasets by account number and merge same-account files."""
+    groups = {}
+    for data in datasets:
+        key = data.account.account_number
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(data)
+
+    merged = []
+    for items in groups.values():
+        if len(items) == 1:
+            merged.append(items[0])
+            continue
+
+        all_txns = []
+        files = []
+        start_dates = []
+        end_dates = []
+        institution = ''
+        institution_fid = ''
+        account_type = ''
+
+        for d in items:
+            all_txns.extend(d.transactions)
+            files.append(d.file_path)
+            if d.account.start_date:
+                start_dates.append(d.account.start_date)
+            if d.account.end_date:
+                end_dates.append(d.account.end_date)
+            if d.account.institution and not institution:
+                institution = d.account.institution
+            if d.account.institution_fid and not institution_fid:
+                institution_fid = d.account.institution_fid
+            if d.account.account_type and not account_type:
+                account_type = d.account.account_type
+
+        all_txns.sort(key=lambda t: t.date or date.min)
+
+        items_by_end = sorted(
+            (d for d in items if d.account.end_date),
+            key=lambda d: d.account.end_date,
+        )
+        latest = items_by_end[-1].account if items_by_end else items[0].account
+
+        merged_acct = AccountInfo(
+            account_number=items[0].account.account_number,
+            routing_number=items[0].account.routing_number,
+            institution=institution or items[0].account.institution,
+            institution_fid=institution_fid or items[0].account.institution_fid,
+            account_type=account_type or items[0].account.account_type,
+            branch_id=items[0].account.branch_id,
+            currency=items[0].account.currency,
+            start_date=min(start_dates) if start_dates else None,
+            end_date=max(end_dates) if end_dates else None,
+            ledger_balance=latest.ledger_balance,
+            available_balance=latest.available_balance,
+            transaction_count=len(all_txns),
+        )
+
+        merged.append(OfxResult(
+            file_path=files[0],
+            account=merged_acct,
+            transactions=all_txns,
+            source_files=files,
+        ))
+
+    return merged
+
+
 def fmt_info_block(data, idx=0, total=0):
     """Format a single account info block as text lines."""
     acct = data.account
     txns = data.transactions
+    n_files = len(data.source_files)
     lines = []
 
     if total > 1:
-        lines.append(f"--- [{idx + 1}/{total}] {data.file_path} ---")
+        label = f"{n_files} files" if n_files > 1 else os.path.basename(data.source_files[0])
+        lines.append(f"--- [{idx + 1}/{total}] {label} ---")
+
+    if n_files > 1:
+        lines.append(f"Source files ({n_files}):")
+        for f in data.source_files:
+            lines.append(f"  {f}")
 
     lines += [
-        f"File:               {data.file_path}",
         f"Institution:        {acct.institution}",
         f"Account Number:     {acct.account_number}",
     ]
@@ -112,12 +188,12 @@ def fmt_info_block(data, idx=0, total=0):
 def cmd_info(args):
     ofx_files = collect_ofx_files(args.files)
     datasets = [load_ofx(f) for f in ofx_files]
+    merged = merge_accounts(datasets)
 
     if args.format == 'json':
         output = []
-        for data in datasets:
-            obj = data.account.to_dict()
-            obj['file'] = data.file_path
+        for data in merged:
+            obj = data.to_dict()
             txns = data.transactions
             if txns:
                 dates = sorted(t.date for t in txns if t.date)
@@ -128,20 +204,21 @@ def cmd_info(args):
         print(json.dumps(output, indent=2, cls=DecimalEncoder))
     else:
         blocks = []
-        for i, data in enumerate(datasets):
-            blocks.append(fmt_info_block(data, i, len(datasets)))
+        for i, data in enumerate(merged):
+            blocks.append(fmt_info_block(data, i, len(merged)))
         print("\n\n".join(blocks))
 
 
 def cmd_trans(args):
     ofx_files = collect_ofx_files(args.files)
     datasets = [load_ofx(f) for f in ofx_files]
+    merged = merge_accounts(datasets)
 
-    currencies = set(d.account.currency for d in datasets)
-    multi_file = len(datasets) > 1
+    currencies = set(d.account.currency for d in merged)
+    multi_account = len(merged) > 1
 
     all_txns = []
-    for data in datasets:
+    for data in merged:
         acct_number = data.account.account_number
         for t in data.transactions:
             all_txns.append((t, acct_number, data.account.currency))
@@ -159,10 +236,10 @@ def cmd_trans(args):
 
     if args.format == 'json':
         output = []
-        for data in datasets:
+        for data in merged:
             file_txns = [t for t, a, _ in all_txns if a == data.account.account_number]
             output.append({
-                'file': data.file_path,
+                'files': data.source_files,
                 'account': data.account.to_dict(),
                 'transactions': [t.to_dict() for t in file_txns],
             })
@@ -170,16 +247,16 @@ def cmd_trans(args):
     elif args.format == 'csv':
         writer = csv.writer(sys.stdout)
         cols = ['fitid', 'date', 'type', 'payee', 'memo', 'amount', 'currency']
-        if multi_file:
+        if multi_account:
             cols.insert(1, 'account')
         writer.writerow(cols)
         for t, acct, cur in all_txns:
             row = [t.fitid, str(t.date) if t.date else '', t.type, t.payee, t.memo, t.amount, cur]
-            if multi_file:
+            if multi_account:
                 row.insert(1, acct)
             writer.writerow(row)
     else:
-        if multi_file:
+        if multi_account:
             headers = ['Date', 'Account', 'Type', 'Payee', 'Amount']
             rows = [[str(t.date) if t.date else '', acct, t.type, t.payee, str(t.amount)]
                     for t, acct, _cur in all_txns]
@@ -248,9 +325,13 @@ def main():
 
     if sys.argv[1] not in subcommands and sys.argv[1] not in ('-h', '--help'):
         ofx_files = collect_ofx_files(non_flags)
-        for data in (load_ofx(f) for f in ofx_files):
+        datasets = [load_ofx(f) for f in ofx_files]
+        merged = merge_accounts(datasets)
+        for data in merged:
             acct = data.account
-            print(f"{acct.institution} | {acct.account_number} | {acct.start_date} to {acct.end_date}")
+            n_files = len(data.source_files)
+            src = f"({n_files} files) " if n_files > 1 else ""
+            print(f"{acct.institution} | {acct.account_number} | {acct.start_date} to {acct.end_date} {src}")
             print(f"  Balance: {acct.ledger_balance} {acct.currency}  |  {acct.transaction_count} transactions\n")
         return
 

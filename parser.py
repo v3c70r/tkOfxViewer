@@ -70,10 +70,15 @@ class OfxResult:
     file_path: str
     account: AccountInfo
     transactions: List[Transaction]
+    source_files: List[str] = None
+
+    def __post_init__(self):
+        if self.source_files is None:
+            self.source_files = [self.file_path]
 
     def to_dict(self):
         return {
-            'file': self.file_path,
+            'files': self.source_files,
             'account': self.account.to_dict(),
             'transactions': [t.to_dict() for t in self.transactions],
         }
@@ -92,32 +97,32 @@ class OfxParserWrapper:
         inst = acct.institution
 
         account_info = AccountInfo(
-            account_number=acct.number or '',
-            routing_number=acct.routing_number or '',
+            account_number=getattr(acct, 'number', '') or '',
+            routing_number=getattr(acct, 'routing_number', '') or '',
             institution=inst.organization if inst else '',
             institution_fid=inst.fid if inst else '',
-            account_type=acct.account_type or '',
-            branch_id=acct.branch_id or '',
-            currency=stmt.currency.upper() if stmt.currency else '',
-            start_date=stmt.start_date.date() if stmt.start_date else None,
-            end_date=stmt.end_date.date() if stmt.end_date else None,
-            ledger_balance=stmt.balance,
-            available_balance=stmt.available_balance,
-            transaction_count=len(stmt.transactions) if stmt.transactions else 0,
+            account_type=getattr(acct, 'account_type', '') or '',
+            branch_id=getattr(acct, 'branch_id', '') or '',
+            currency=stmt.currency.upper() if getattr(stmt, 'currency', None) else '',
+            start_date=stmt.start_date.date() if getattr(stmt, 'start_date', None) else None,
+            end_date=stmt.end_date.date() if getattr(stmt, 'end_date', None) else None,
+            ledger_balance=getattr(stmt, 'balance', None),
+            available_balance=getattr(stmt, 'available_balance', None),
+            transaction_count=len(stmt.transactions) if getattr(stmt, 'transactions', None) else 0,
         )
 
         transactions = []
-        for txn in (stmt.transactions or []):
+        for txn in (getattr(stmt, 'transactions', None) or []):
             transactions.append(Transaction(
-                fitid=txn.id or '',
-                type=txn.type or '',
-                date=txn.date.date() if txn.date else None,
-                payee=txn.payee or '',
-                memo=txn.memo or '',
-                amount=txn.amount,
-                checknum=txn.checknum or None,
-                sic=str(txn.sic) if txn.sic else None,
-                mcc=txn.mcc or None,
+                fitid=getattr(txn, 'id', '') or '',
+                type=getattr(txn, 'type', '') or '',
+                date=txn.date.date() if getattr(txn, 'date', None) else None,
+                payee=getattr(txn, 'payee', '') or '',
+                memo=getattr(txn, 'memo', '') or '',
+                amount=getattr(txn, 'amount', None),
+                checknum=getattr(txn, 'checknum', None) or None,
+                sic=str(getattr(txn, 'sic', None)) if getattr(txn, 'sic', None) else None,
+                mcc=getattr(txn, 'mcc', None) or None,
             ))
 
         return OfxResult(
